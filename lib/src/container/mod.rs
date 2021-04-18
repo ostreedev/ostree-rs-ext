@@ -15,4 +15,5 @@ type Result<T> = anyhow::Result<T>;
 pub mod buildoci;
 pub mod client;
 
+mod asynctar;
 pub mod oci;
