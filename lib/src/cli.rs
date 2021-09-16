@@ -228,7 +228,7 @@ async fn container_export(
 /// Load metadata for a container image with an encapsulated ostree commit.
 async fn container_info(imgref: &str) -> Result<()> {
     let imgref = imgref.try_into()?;
-    let digested = crate::container::fetch_manifest_info(&imgref).await?;
+    let (_, digested) = crate::container::fetch_manifest(&imgref).await?;
     println!("{}", digested);
     Ok(())
 }

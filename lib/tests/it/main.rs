@@ -275,8 +275,8 @@ async fn test_container_import_export() -> Result<()> {
         imgref: srcoci_imgref.clone(),
     };
 
-    let inspect = ostree_ext::container::fetch_manifest_info(&srcoci_unverified).await?;
-    assert_eq!(inspect.imgref.digest().unwrap(), digest);
+    let (_, digested_imgref) = ostree_ext::container::fetch_manifest(&srcoci_unverified).await?;
+    assert_eq!(digested_imgref.imgref.digest().unwrap(), digest);
 
     // No remote matching
     let srcoci_unknownremote = OstreeImageReference {

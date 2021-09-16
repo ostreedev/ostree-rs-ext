@@ -90,14 +90,9 @@ impl AsyncRead for ProgressReader {
 
 /// Download the manifest for a target image.
 #[context("Fetching manifest")]
-pub async fn fetch_manifest_info(imgref: &OstreeImageReference) -> Result<OstreeImageReference> {
-    let (_, manifest_digest) = fetch_manifest(imgref).await?;
-    Ok(imgref.with_digest(&manifest_digest))
-}
-
-/// Download the manifest for a target image.
-#[context("Fetching manifest")]
-async fn fetch_manifest(imgref: &OstreeImageReference) -> Result<(oci::Manifest, String)> {
+pub async fn fetch_manifest(
+    imgref: &OstreeImageReference,
+) -> Result<(Vec<u8>, OstreeImageReference)> {
     let mut proc = skopeo::new_cmd();
     let imgref_base = &imgref.imgref;
     proc.args(&["inspect", "--raw"])
@@ -111,7 +106,7 @@ async fn fetch_manifest(imgref: &OstreeImageReference) -> Result<(oci::Manifest,
     let raw_manifest = proc.stdout;
     let digest = openssl::hash::hash(openssl::hash::MessageDigest::sha256(), &raw_manifest)?;
     let digest = format!("sha256:{}", hex::encode(digest.as_ref()));
-    Ok((serde_json::from_slice(&raw_manifest)?, digest))
+    Ok((raw_manifest, imgref.with_digest(&digest)))
 }
 
 /// Read the contents of the first <checksum>.tar we find.
@@ -325,9 +320,9 @@ pub async fn import(
         return Err(anyhow!("containers-policy.json specifies a default of `insecureAcceptAnything`; refusing usage"));
     }
     let options = options.unwrap_or_default();
-    let (manifest, image_digest) = fetch_manifest(imgref).await?;
-    let manifest = &manifest;
-    let layerid = find_layer_blobid(manifest)?;
+    let (manifest, digested_reference) = fetch_manifest(imgref).await?;
+    let manifest: oci::Manifest = serde_json::from_slice(&manifest)?;
+    let layerid = find_layer_blobid(&manifest)?;
     event!(Level::DEBUG, "target blob: {}", layerid);
     let (blob, worker) = fetch_layer(imgref, layerid.as_str(), options.progress).await?;
     let blob = tokio::io::BufReader::new(blob);
@@ -343,6 +338,6 @@ pub async fn import(
     event!(Level::DEBUG, "created commit {}", ostree_commit);
     Ok(Import {
         ostree_commit,
-        digested_reference: imgref.with_digest(&image_digest),
+        digested_reference,
     })
 }

@@ -128,9 +128,9 @@ async fn build_impl(
     };
     // FIXME - it's obviously broken to do this push -> inspect cycle because of the possibility
     // of a race condition, but we need to patch skopeo to have the equivalent of `podman push --digestfile`.
-    let info = super::import::fetch_manifest_info(&imgref).await?;
+    let (_, digested_imgref) = super::import::fetch_manifest(&imgref).await?;
     // Safety: We know fetch_manifest_info returns a digested image
-    Ok(dest.with_digest(info.imgref.digest().unwrap()))
+    Ok(dest.with_digest(digested_imgref.imgref.digest().unwrap()))
 }
 
 /// Given an OSTree repository and ref, generate a container image.
