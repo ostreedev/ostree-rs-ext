@@ -306,7 +306,7 @@ pub struct ImportOptions {
     pub progress: Option<tokio::sync::watch::Sender<ImportProgress>>,
 }
 
-/// Fetch a container image and import its embedded OSTree commit.
+/// Fetch a container image and import its embedded OSTree commit, returning both the digested manifest and the ostree commit checksum.
 #[context("Importing {}", imgref)]
 #[instrument(skip(repo, options))]
 pub async fn import(
@@ -314,20 +314,36 @@ pub async fn import(
     imgref: &OstreeImageReference,
     options: Option<ImportOptions>,
 ) -> Result<Import> {
-    if matches!(imgref.sigverify, SignatureSource::ContainerPolicy)
+    let (manifest, digested_reference) = fetch_manifest(imgref).await?;
+    let ostree_commit = import_with_manifest(repo, &manifest, &digested_reference, options).await?;
+    Ok(Import {
+        ostree_commit,
+        digested_reference,
+    })
+}
+
+/// Given an already fetched manifest and digested image reference, fetch a container image and import its embedded OSTree commit.
+#[context("Importing {}", digested_imgref)]
+#[instrument(skip(repo, options))]
+pub async fn import_with_manifest(
+    repo: &ostree::Repo,
+    manifest_data: &[u8],
+    digested_imgref: &OstreeImageReference,
+    options: Option<ImportOptions>,
+) -> Result<String> {
+    if matches!(digested_imgref.sigverify, SignatureSource::ContainerPolicy)
         && skopeo::container_policy_is_default_insecure()?
     {
         return Err(anyhow!("containers-policy.json specifies a default of `insecureAcceptAnything`; refusing usage"));
     }
     let options = options.unwrap_or_default();
-    let (manifest, digested_reference) = fetch_manifest(imgref).await?;
-    let manifest: oci::Manifest = serde_json::from_slice(&manifest)?;
+    let manifest: oci::Manifest = serde_json::from_slice(manifest_data)?;
     let layerid = find_layer_blobid(&manifest)?;
     event!(Level::DEBUG, "target blob: {}", layerid);
-    let (blob, worker) = fetch_layer(imgref, layerid.as_str(), options.progress).await?;
+    let (blob, worker) = fetch_layer(digested_imgref, layerid.as_str(), options.progress).await?;
     let blob = tokio::io::BufReader::new(blob);
     let mut taropts: crate::tar::TarImportOptions = Default::default();
-    match &imgref.sigverify {
+    match &digested_imgref.sigverify {
         SignatureSource::OstreeRemote(remote) => taropts.remote = Some(remote.clone()),
         SignatureSource::ContainerPolicy | SignatureSource::ContainerPolicyAllowInsecure => {}
     }
@@ -336,8 +352,5 @@ pub async fn import(
     let ostree_commit = ostree_commit?;
     let _: () = worker?;
     event!(Level::DEBUG, "created commit {}", ostree_commit);
-    Ok(Import {
-        ostree_commit,
-        digested_reference,
-    })
+    Ok(ostree_commit)
 }
