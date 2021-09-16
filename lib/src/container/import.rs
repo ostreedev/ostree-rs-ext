@@ -90,11 +90,9 @@ impl AsyncRead for ProgressReader {
 
 /// Download the manifest for a target image.
 #[context("Fetching manifest")]
-pub async fn fetch_manifest_info(
-    imgref: &OstreeImageReference,
-) -> Result<OstreeContainerManifestInfo> {
+pub async fn fetch_manifest_info(imgref: &OstreeImageReference) -> Result<OstreeImageReference> {
     let (_, manifest_digest) = fetch_manifest(imgref).await?;
-    Ok(OstreeContainerManifestInfo { manifest_digest })
+    Ok(imgref.with_digest(&manifest_digest))
 }
 
 /// Download the manifest for a target image.
@@ -274,8 +272,8 @@ async fn fetch_layer<'s>(
 pub struct Import {
     /// The ostree commit that was imported
     pub ostree_commit: String,
-    /// The image digest retrieved
-    pub image_digest: String,
+    /// The image fetched including digest
+    pub digested_reference: OstreeImageReference,
 }
 
 fn find_layer_blobid(manifest: &oci::Manifest) -> Result<String> {
@@ -345,6 +343,6 @@ pub async fn import(
     event!(Level::DEBUG, "created commit {}", ostree_commit);
     Ok(Import {
         ostree_commit,
-        image_digest,
+        digested_reference: imgref.with_digest(&image_digest),
     })
 }

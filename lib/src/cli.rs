@@ -193,12 +193,14 @@ async fn container_import(repo: &str, imgref: &str, write_ref: Option<&str>) -> 
             gio::NONE_CANCELLABLE,
         )?;
         println!(
-            "Imported: {} => {}",
-            write_ref,
-            import.ostree_commit.as_str()
+            "Imported: {} to ref {}",
+            import.digested_reference, write_ref
         );
     } else {
-        println!("Imported: {}", import.ostree_commit);
+        println!(
+            "Imported: {} (commit {})",
+            import.digested_reference, import.ostree_commit
+        );
     }
 
     Ok(())
@@ -226,8 +228,8 @@ async fn container_export(
 /// Load metadata for a container image with an encapsulated ostree commit.
 async fn container_info(imgref: &str) -> Result<()> {
     let imgref = imgref.try_into()?;
-    let info = crate::container::fetch_manifest_info(&imgref).await?;
-    println!("{} @{}", imgref, info.manifest_digest);
+    let digested = crate::container::fetch_manifest_info(&imgref).await?;
+    println!("{}", digested);
     Ok(())
 }
 

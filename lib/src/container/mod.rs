@@ -116,6 +116,15 @@ impl ImageReference {
             name: format!("{}@{}", name, digest),
         }
     }
+
+    /// Return the @sha256:<checksum> portion of the image reference, if any.
+    pub fn digest(&self) -> Option<&str> {
+        if let Some(idx) = self.name.rfind('@') {
+            Some(self.name.split_at(idx).0)
+        } else {
+            None
+        }
+    }
 }
 
 impl OstreeImageReference {
