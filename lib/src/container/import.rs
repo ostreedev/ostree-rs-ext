@@ -120,11 +120,11 @@ pub async fn find_layer_tar(
     let pipein = crate::async_util::async_read_to_sync(src);
     // An internal channel of Bytes
     let (tx_buf, rx_buf) = tokio::sync::mpsc::channel(2);
-    let blob_symlink_target = format!("../{}.tar", blobid);
+    // Clone to pass across to thread
+    let blobid = blobid.to_string();
     let worker = tokio::task::spawn_blocking(move || {
         let mut pipein = pipein;
-        let r =
-            find_layer_tar_sync(&mut pipein, blob_symlink_target, tx_buf).context("Import worker");
+        let r = find_layer_tar_sync(&mut pipein, &blobid, tx_buf).context("Import worker");
         // Ensure we read the entirety of the stream, otherwise skopeo will get an EPIPE.
         let _ = std::io::copy(&mut pipein, &mut std::io::sink());
         r
@@ -136,70 +136,58 @@ pub async fn find_layer_tar(
     Ok((reader, worker))
 }
 
-// Helper function invoked to synchronously parse a `docker-archive:` formatted tar stream, finding
+// Helper function invoked to synchronously parse an `oci-archive:` formatted tar stream, finding
 // the desired layer tarball and writing its contents via a stream of byte chunks
 // to a channel.
 fn find_layer_tar_sync(
     pipein: impl Read + Send + Unpin,
-    blob_symlink_target: String,
+    target_sha256: &str,
     tx_buf: tokio::sync::mpsc::Sender<std::io::Result<bytes::Bytes>>,
 ) -> Result<()> {
     let mut archive = tar::Archive::new(pipein);
     let mut buf = vec![0u8; 8192];
     let mut found = false;
     for entry in archive.entries()? {
-        let mut entry = entry.context("Reading entry")?;
+        let entry = entry.context("Reading entry")?;
         if found {
             // Continue to read to the end to avoid broken pipe error from skopeo
             continue;
         }
-        let path = entry.path()?;
-        let path: &Utf8Path = path.deref().try_into()?;
-        // We generally expect our layer to be first, but let's just skip anything
-        // unexpected to be robust against changes in skopeo.
-        if path.extension() != Some("tar") {
+        if entry.header().entry_type() != tar::EntryType::Regular {
             continue;
         }
+        let path = entry.path()?;
+        let path: &Utf8Path = path.deref().try_into()?;
+        let entry_sha256 = if let Some(entry_sha256) = path.strip_prefix("blobs/sha256").ok() {
+            entry_sha256
+        } else {
+            continue;
+        };
+        if entry_sha256 != target_sha256 {
+            continue;
+        }
+
         event!(Level::DEBUG, "Found {}", path);
 
-        match entry.header().entry_type() {
-            tar::EntryType::Symlink => {
-                if let Some(name) = path.file_name() {
-                    if name == "layer.tar" {
-                        let target = entry
-                            .link_name()?
-                            .ok_or_else(|| anyhow!("Invalid link {}", path))?;
-                        let target = Utf8Path::from_path(&*target)
-                            .ok_or_else(|| anyhow!("Invalid non-UTF8 path {:?}", target))?;
-                        if target != blob_symlink_target {
-                            return Err(anyhow!(
-                                "Found unexpected layer link {} -> {}",
-                                path,
-                                target
-                            ));
-                        }
-                    }
-                }
+        let bufr = std::io::BufReader::new(entry);
+        let mut gzr = flate2::bufread::GzDecoder::new(bufr);
+        loop {
+            let n = gzr
+                .read(&mut buf[..])
+                .context("Reading tar file contents")?;
+            let done = 0 == n;
+            let r = Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(&buf[0..n]));
+            let receiver_closed = tx_buf.blocking_send(r).is_err();
+            if receiver_closed || done {
+                found = true;
+                break;
             }
-            tar::EntryType::Regular => loop {
-                let n = entry
-                    .read(&mut buf[..])
-                    .context("Reading tar file contents")?;
-                let done = 0 == n;
-                let r = Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(&buf[0..n]));
-                let receiver_closed = tx_buf.blocking_send(r).is_err();
-                if receiver_closed || done {
-                    found = true;
-                    break;
-                }
-            },
-            _ => continue,
         }
     }
     if found {
         Ok(())
     } else {
-        Err(anyhow!("Failed to find layer {}", blob_symlink_target))
+        Err(anyhow!("Failed to find layer {}", target_sha256))
     }
 }
 
@@ -226,7 +214,7 @@ async fn fetch_layer<'s>(
     tracing::trace!("skopeo pull starting to {}", fifo);
     proc.arg("copy")
         .arg(imgref.imgref.to_string())
-        .arg(format!("docker-archive:{}", fifo));
+        .arg(format!("oci-archive:{}", fifo));
     let proc = skopeo::spawn(proc)?;
     let fifo_reader = ProgressReader {
         reader: Box::new(tokio::fs::File::open(fifo).await?),
