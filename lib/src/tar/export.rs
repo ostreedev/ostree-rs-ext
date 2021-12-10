@@ -249,7 +249,7 @@ impl<'a, W: std::io::Write> OstreeTarWriter<'a, W> {
                 h.set_size(0);
                 h.set_entry_type(tar::EntryType::Symlink);
                 let context = || format!("Writing content symlink: {}", checksum);
-                h.set_link_name(meta.symlink_target().unwrap().as_str())
+                h.set_link_name_literal(meta.symlink_target().unwrap().as_str())
                     .with_context(context)?;
                 self.out
                     .append_data(&mut h, &path, &mut std::io::empty())
