@@ -98,6 +98,19 @@ enum ContainerOpts {
         quiet: bool,
     },
 
+    #[structopt(alias = "import")]
+    /// Import the ostree commit embedded in the running container image
+    UnencapsulateSelf {
+        /// Path to the target repository
+        #[structopt(long)]
+        #[structopt(parse(try_from_str = parse_repo))]
+        repo: ostree::Repo,
+
+        /// Create an ostree ref pointing to the imported commit
+        #[structopt(long)]
+        write_ref: Option<String>,
+    },
+
     /// Print information about an exported ostree-container image.
     Info {
         /// Image reference, e.g. registry:quay.io/exampleos/exampleos:latest
@@ -470,6 +483,20 @@ fn print_layer_status(prep: &PreparedImport) {
     }
 }
 
+fn write_and_print_imported(
+    repo: &ostree::Repo,
+    write_ref: Option<&str>,
+    commit: &str,
+) -> Result<()> {
+    if let Some(write_ref) = write_ref {
+        repo.set_ref_immediate(None, write_ref, Some(commit), gio::NONE_CANCELLABLE)?;
+        println!("Imported: {} => {}", write_ref, commit);
+    } else {
+        println!("Imported: {}", commit);
+    }
+    Ok(())
+}
+
 /// Import a container image with an encapsulated ostree commit.
 async fn container_import(
     repo: &ostree::Repo,
@@ -494,23 +521,15 @@ async fn container_import(
         pb.finish();
     }
     let import = import?;
-    if let Some(write_ref) = write_ref {
-        repo.set_ref_immediate(
-            None,
-            write_ref,
-            Some(import.ostree_commit.as_str()),
-            gio::NONE_CANCELLABLE,
-        )?;
-        println!(
-            "Imported: {} => {}",
-            write_ref,
-            import.ostree_commit.as_str()
-        );
-    } else {
-        println!("Imported: {}", import.ostree_commit);
-    }
+    write_and_print_imported(repo, write_ref, &import.ostree_commit)?;
 
     Ok(())
+}
+
+/// Import a the running container image's ostree commit
+async fn container_unrencapsulate_self(repo: &ostree::Repo, write_ref: Option<&str>) -> Result<()> {
+    let rev = ostree_container::unencapsulate_self(repo).await?;
+    write_and_print_imported(repo, write_ref, &rev)
 }
 
 /// Export a container image with an encapsulated ostree commit.
@@ -702,6 +721,9 @@ where
                 write_ref,
                 quiet,
             } => container_import(&repo, &imgref, write_ref.as_deref(), quiet).await,
+            ContainerOpts::UnencapsulateSelf { repo, write_ref } => {
+                container_unrencapsulate_self(&repo, write_ref.as_deref()).await
+            }
             ContainerOpts::Encapsulate {
                 repo,
                 rev,

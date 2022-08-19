@@ -219,3 +219,37 @@ pub(crate) async fn fetch_layer_decompress<'a>(
         Ok((blob, Either::Right(driver)))
     }
 }
+
+/// Load the encapsulated commit embedded in the container.  For now, this requires
+/// the relatively new `ostree/encapsulated` ref.  In the future we'll fall back
+/// to using `list_commits_starting_with()` but that isn't exposed to Rust yet.
+fn find_encapsulated_commit(repo: &ostree::Repo) -> Result<ostree::glib::GString> {
+    repo.require_rev(&format!("ostree/{}", crate::tar::OSTREEREF))
+        .map_err(Into::into)
+}
+
+/// Write the OSTree commit embedded in the running container image to the target repository.
+#[context("Importing self")]
+#[instrument(skip(repo))]
+pub async fn unencapsulate_self(repo: &ostree::Repo) -> Result<String> {
+    use glib::prelude::ToVariant;
+    use ostree::glib;
+    let repo = repo.clone();
+    crate::tokio_util::spawn_blocking_cancellable_flatten(move |cancellable| {
+        let cancellable = Some(cancellable);
+        let self_repo = ostree::Repo::open_at(libc::AT_FDCWD, "/ostree/repo", cancellable)?;
+
+        let rev = find_encapsulated_commit(&self_repo)?;
+
+        let srcfd = &format!("file:///proc/self/fd/{}", self_repo.dfd());
+        let flags = ostree::RepoPullFlags::MIRROR;
+        let opts = glib::VariantDict::new(None);
+        let refs = [rev.as_str()];
+        opts.insert("refs", &&refs[..]);
+        opts.insert("flags", &(flags.bits() as i32));
+        let options = opts.to_variant();
+        repo.pull_with_options(srcfd, &options, None, cancellable)?;
+        Ok::<_, anyhow::Error>(rev.to_string())
+    })
+    .await
+}

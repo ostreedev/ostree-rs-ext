@@ -27,7 +27,7 @@ const SYSROOT: &str = "sysroot";
 // This way the default ostree -> sysroot/ostree symlink works.
 const OSTREEDIR: &str = "sysroot/ostree";
 // The ref added (under ostree/) in the exported OSTree repo pointing at the commit.
-const OSTREEREF: &str = "encapsulated";
+pub(crate) const OSTREEREF: &str = "encapsulated";
 
 /// In v0 format, we use this relative path prefix.  I think I chose this by looking
 /// at the current Fedora base image tar stream.  However, several others don't do
