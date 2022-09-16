@@ -290,6 +290,10 @@ enum ContainerImageOpts {
         /// Write the deployed checksum to this file
         #[structopt(long)]
         write_commitid_to: Option<Utf8PathBuf>,
+
+        #[structopt(long)]
+        /// Do not remove any other deployments
+        retain: bool,
     },
 }
 
@@ -782,6 +786,7 @@ where
                     karg,
                     proxyopts,
                     write_commitid_to,
+                    retain,
                 } => {
                     let sysroot = &ostree::Sysroot::new(Some(&gio::File::for_path(&sysroot)));
                     sysroot.load(gio::NONE_CANCELLABLE)?;
@@ -795,6 +800,7 @@ where
                         kargs: kargs.as_deref(),
                         target_imgref: target_imgref.as_ref(),
                         proxy_cfg: Some(proxyopts.into()),
+                        retain,
                         ..Default::default()
                     };
                     let state = crate::container::deploy::deploy(

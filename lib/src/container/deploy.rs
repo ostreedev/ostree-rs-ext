@@ -33,6 +33,9 @@ pub struct DeployOpts<'a> {
     /// to a different container image, the fetch process will reuse shared layers, but
     /// it will not be necessary to remove the previous image.
     pub no_imgref: bool,
+
+    /// If true, do not remove any other deployments
+    pub retain: bool,
 }
 
 /// Write a container image to an OSTree deployment.
@@ -73,7 +76,11 @@ pub async fn deploy(
         options.kargs.unwrap_or_default(),
         cancellable,
     )?;
-    let flags = ostree::SysrootSimpleWriteDeploymentFlags::NONE;
+    let flags = if options.retain {
+        ostree::SysrootSimpleWriteDeploymentFlags::RETAIN
+    } else {
+        ostree::SysrootSimpleWriteDeploymentFlags::NONE
+    };
     sysroot.simple_write_deployment(Some(stateroot), deployment, None, flags, cancellable)?;
     sysroot.cleanup(cancellable)?;
 
