@@ -32,6 +32,7 @@ mod isolation;
 
 pub mod bootabletree;
 pub mod cli;
+pub mod cli_bootc;
 pub mod container;
 pub mod container_utils;
 pub mod diff;

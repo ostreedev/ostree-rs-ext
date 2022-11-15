@@ -433,7 +433,7 @@ pub fn layer_progress_format(p: &ImportProgress) -> String {
     }
 }
 
-async fn handle_layer_progress_print(
+pub(crate) async fn handle_layer_progress_print(
     mut layers: Receiver<ImportProgress>,
     mut layer_bytes: tokio::sync::watch::Receiver<Option<LayerProgress>>,
 ) {
@@ -477,7 +477,7 @@ async fn handle_layer_progress_print(
     }
 }
 
-fn print_layer_status(prep: &PreparedImport) {
+pub(crate) fn print_layer_status(prep: &PreparedImport) {
     if let Some(status) = prep.format_layer_status() {
         println!("{status}");
     }
