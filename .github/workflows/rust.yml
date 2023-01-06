@@ -8,9 +8,9 @@ permissions:
 
 on:
   push:
-    branches: [main]
+    branches: [stable-0.8]
   pull_request:
-    branches: [main]
+    branches: [stable-0.8]
   workflow_dispatch: {}
 
 env:
