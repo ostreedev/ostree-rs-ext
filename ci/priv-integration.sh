@@ -30,18 +30,24 @@ for img in "${image}" "${old_image}"; do
     ostree-ext-cli container image deploy --sysroot "${sysroot}" \
         --stateroot "${stateroot}" --imgref ostree-unverified-registry:"${img}"
     ostree admin --sysroot="${sysroot}" status
-    initial_refs=$(ostree --repo="${sysroot}/ostree/repo" refs | wc -l)
+    ostree --repo="${sysroot}/ostree/repo" refs > initrefs.txt
+    initial_refs=$(wc -l < initrefs.txt)
     ostree-ext-cli container image remove --repo "${sysroot}/ostree/repo" registry:"${img}"
-    pruned_refs=$(ostree --repo="${sysroot}/ostree/repo" refs | wc -l)
+    ostree --repo="${sysroot}/ostree/repo" refs > refs.txt
+    pruned_refs=$(wc -l < refs.txt)
     # Removing the image should only drop the image reference, not its layers
-    test "$(($initial_refs - 1))" = "$pruned_refs"
+    if test "$(($initial_refs - 1))" '!=' "$pruned_refs"; then
+        cat refs.txt
+        echo "unexpected ref count"
+        exit 1
+    fi
     ostree admin --sysroot="${sysroot}" undeploy 0
     # TODO: when we fold together ostree and ostree-ext, automatically prune layers
     ostree-ext-cli container image prune-layers --repo="${sysroot}/ostree/repo"
     ostree --repo="${sysroot}/ostree/repo" refs > refs.txt
     if test "$(wc -l < refs.txt)" -ne 0; then
-        echo "found refs"
         cat refs.txt
+        echo "found refs"
         exit 1
     fi
 done
