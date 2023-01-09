@@ -795,12 +795,14 @@ r usr/bin/bash bash-v0
         }
     }
 
+    assert_eq!(store::list_images(fixture.destrepo()).unwrap().len(), 1);
+    let n = store::count_layer_references(fixture.destrepo())? as i64;
     let _import = imp.import(prep).await.unwrap();
 
     assert_eq!(store::list_images(fixture.destrepo()).unwrap().len(), 1);
 
-    let n_removed = store::gc_image_layers(fixture.destrepo())?;
-    assert_eq!(n_removed, 2);
+    let n2 = store::count_layer_references(fixture.destrepo())? as i64;
+    assert_eq!(n, n2);
     fixture
         .destrepo()
         .prune(ostree::RepoPruneFlags::REFS_ONLY, 0, gio::NONE_CANCELLABLE)?;
@@ -841,6 +843,8 @@ r usr/bin/bash bash-v0
     assert!(prep.ostree_commit_layer.commit.is_some());
     assert_eq!(prep.ostree_layers.len(), nlayers as usize);
 
+    // We want to test explicit layer pruning
+    imp.disable_gc();
     let _import = imp.import(prep).await.unwrap();
     assert_eq!(store::list_images(fixture.destrepo()).unwrap().len(), 2);
 
@@ -853,7 +857,9 @@ r usr/bin/bash bash-v0
     // Should only be new layers
     let n_removed = store::gc_image_layers(fixture.destrepo())?;
     assert_eq!(n_removed, 0);
-    store::remove_images(fixture.destrepo(), [&imgref.imgref]).unwrap();
+    // Also test idempotence
+    store::remove_image(fixture.destrepo(), &imgref.imgref).unwrap();
+    store::remove_image(fixture.destrepo(), &imgref.imgref).unwrap();
     assert_eq!(store::list_images(fixture.destrepo()).unwrap().len(), 1);
     // Still no removed layers after removing the base image
     let n_removed = store::gc_image_layers(fixture.destrepo())?;
@@ -864,6 +870,7 @@ r usr/bin/bash bash-v0
     assert_eq!(n_removed, (*CONTENTS_V0_LEN + 1) as u32);
 
     // Repo should be clean now
+    assert_eq!(store::count_layer_references(fixture.destrepo())?, 0);
     assert_eq!(
         fixture
             .destrepo()

@@ -132,7 +132,8 @@ pub struct ImageImporter {
     pub(crate) proxy: ImageProxy,
     imgref: OstreeImageReference,
     target_imgref: Option<OstreeImageReference>,
-    no_imgref: bool, // If true, do not write final image ref
+    no_imgref: bool,  // If true, do not write final image ref
+    disable_gc: bool, // If true, don't prune unused image layers
     pub(crate) proxy_img: OpenedImage,
 
     layer_progress: Option<Sender<ImportProgress>>,
@@ -440,6 +441,7 @@ impl ImageImporter {
             proxy_img,
             target_imgref: None,
             no_imgref: false,
+            disable_gc: false,
             imgref: imgref.clone(),
             layer_progress: None,
             layer_byte_progress: None,
@@ -456,6 +458,11 @@ impl ImageImporter {
     /// but in such a way that it does not need to be manually removed later.
     pub fn set_no_imgref(&mut self) {
         self.no_imgref = true;
+    }
+
+    /// Do not prune image layers.
+    pub fn disable_gc(&mut self) {
+        self.disable_gc = true;
     }
 
     /// Determine if there is a new manifest, and if so return its digest.
@@ -684,7 +691,9 @@ impl ImageImporter {
         })
     }
 
-    /// Import a layered container image
+    /// Import a layered container image.
+    ///
+    /// If enabled, this will also prune unused container image layers.
     #[context("Importing")]
     pub async fn import(
         mut self,
@@ -764,7 +773,6 @@ impl ImageImporter {
 
         // Destructure to transfer ownership to thread
         let repo = self.repo;
-        let imgref = self.target_imgref.unwrap_or(self.imgref);
         let state = crate::tokio_util::spawn_blocking_cancellable_flatten(
             move |cancellable| -> Result<Box<LayeredImageState>> {
                 use cap_std_ext::rustix::fd::AsRawFd;
@@ -840,9 +848,15 @@ impl ImageImporter {
                     repo.transaction_set_ref(None, &ostree_ref, Some(merged_commit.as_str()));
                 }
                 txn.commit(cancellable)?;
+
+                if !self.disable_gc {
+                    let n: u32 = gc_image_layers_impl(repo, cancellable)?;
+                    tracing::debug!("pruned {n} layers");
+                }
+
                 // Here we re-query state just to run through the same code path,
                 // though it'd be cheaper to synthesize it from the data we already have.
-                let state = query_image(repo, &imgref)?.unwrap();
+                let state = query_image_commit(repo, &merged_commit)?;
                 Ok(state)
             },
         )
@@ -871,11 +885,16 @@ pub fn query_image_ref(
 ) -> Result<Option<Box<LayeredImageState>>> {
     let ostree_ref = &ref_for_image(imgref)?;
     let merge_rev = repo.resolve_rev(ostree_ref, true)?;
-    let (merge_commit, merge_commit_obj) = if let Some(r) = merge_rev {
-        (r.to_string(), repo.load_commit(r.as_str())?.0)
-    } else {
-        return Ok(None);
-    };
+    merge_rev
+        .map(|r| query_image_commit(repo, r.as_str()))
+        .transpose()
+}
+
+/// Query metadata for a pulled image via an OSTree commit digest.
+/// The digest must refer to a pulled container image's merge commit.
+pub fn query_image_commit(repo: &ostree::Repo, commit: &str) -> Result<Box<LayeredImageState>> {
+    let merge_commit = commit.to_string();
+    let merge_commit_obj = repo.load_commit(commit)?.0;
     let commit_meta = &merge_commit_obj.child_value(0);
     let commit_meta = &ostree::glib::VariantDict::new(Some(commit_meta));
     let (manifest, manifest_digest) = manifest_data_from_commitmeta(commit_meta)?;
@@ -898,7 +917,7 @@ pub fn query_image_ref(
         configuration,
     });
     tracing::debug!(state = ?state);
-    Ok(Some(state))
+    Ok(state)
 }
 
 /// Query metadata for a pulled image.
@@ -957,19 +976,62 @@ pub async fn copy(
     Ok(())
 }
 
+/// Iterate over deployment commits, returning the manifests from
+/// commits which point to a container image.
+fn list_container_deployment_manifests(
+    repo: &ostree::Repo,
+    cancellable: Option<&gio::Cancellable>,
+) -> Result<Vec<ImageManifest>> {
+    let commits = repo
+        .list_refs_ext(
+            Some("ostree/0"),
+            ostree::RepoListRefsExtFlags::empty(),
+            cancellable,
+        )?
+        .into_iter()
+        .chain(repo.list_refs_ext(
+            Some("ostree/1"),
+            ostree::RepoListRefsExtFlags::empty(),
+            cancellable,
+        )?)
+        .map(|v| v.1);
+    let mut r = Vec::new();
+    for commit in commits {
+        let commit_obj = repo.load_commit(&commit)?.0;
+        let commit_meta = &glib::VariantDict::new(Some(&commit_obj.child_value(0)));
+        if commit_meta
+            .lookup::<String>(META_MANIFEST_DIGEST)?
+            .is_some()
+        {
+            let manifest = manifest_data_from_commitmeta(commit_meta)?.0;
+            r.push(manifest);
+        }
+    }
+    Ok(r)
+}
+
 /// Garbage collect unused image layer references.
 ///
 /// This function assumes no transaction is active on the repository.
 /// The underlying objects are *not* pruned; that requires a separate invocation
 /// of [`ostree::Repo::prune`].
 pub fn gc_image_layers(repo: &ostree::Repo) -> Result<u32> {
-    let cancellable = gio::NONE_CANCELLABLE;
+    gc_image_layers_impl(repo, gio::NONE_CANCELLABLE)
+}
+
+#[context("Pruning image layers")]
+fn gc_image_layers_impl(
+    repo: &ostree::Repo,
+    cancellable: Option<&gio::Cancellable>,
+) -> Result<u32> {
     let all_images = list_images(repo)?;
+    let deployment_commits = list_container_deployment_manifests(repo, cancellable)?;
     let all_manifests = all_images
         .into_iter()
         .map(|img| {
             ImageReference::try_from(img.as_str()).and_then(|ir| manifest_for_image(repo, &ir))
         })
+        .chain(deployment_commits.into_iter().map(Ok))
         .collect::<Result<Vec<_>>>()?;
     let mut referenced_layers = BTreeSet::new();
     for m in all_manifests.iter() {
@@ -998,15 +1060,18 @@ pub fn gc_image_layers(repo: &ostree::Repo) -> Result<u32> {
     Ok(pruned)
 }
 
-#[context("Pruning {}", image)]
-fn prune_image(repo: &ostree::Repo, image: &ImageReference) -> Result<()> {
-    let ostree_ref = &ref_for_image(image)?;
-
-    if repo.resolve_rev(ostree_ref, true)?.is_none() {
-        anyhow::bail!("No such image");
-    }
-    repo.set_ref_immediate(None, ostree_ref, None, gio::NONE_CANCELLABLE)?;
-    Ok(())
+#[cfg(feature = "internal-testing-api")]
+/// Return how many container blobs (layers) are stored
+pub fn count_layer_references(repo: &ostree::Repo) -> Result<u32> {
+    let cancellable = gio::NONE_CANCELLABLE;
+    let n = repo
+        .list_refs_ext(
+            Some(LAYER_PREFIX),
+            ostree::RepoListRefsExtFlags::empty(),
+            cancellable,
+        )?
+        .len();
+    Ok(n as u32)
 }
 
 /// Given an image, if it has any non-ostree compatible content, return a suitable
@@ -1042,7 +1107,26 @@ pub fn image_filtered_content_warning(
     Ok(r)
 }
 
-/// Remove the specified image references.
+/// Remove the specified image reference.  If the image is already
+/// not present, this function will successfully perform no operation.
+///
+/// This function assumes no transaction is active on the repository.
+/// The underlying layers are *not* pruned; that requires a separate invocation
+/// of [`gc_image_layers`].
+#[context("Pruning {img}")]
+pub fn remove_image(repo: &ostree::Repo, img: &ImageReference) -> Result<bool> {
+    let ostree_ref = &ref_for_image(img)?;
+    let found = repo.resolve_rev(ostree_ref, true)?.is_some();
+    // Note this API is already idempotent, but we might as well avoid another
+    // trip into ostree.
+    if found {
+        repo.set_ref_immediate(None, ostree_ref, None, gio::NONE_CANCELLABLE)?;
+    }
+    Ok(found)
+}
+
+/// Remove the specified image references.  If an image is not found, further
+/// images will be removed, but an error will be returned.
 ///
 /// This function assumes no transaction is active on the repository.
 /// The underlying layers are *not* pruned; that requires a separate invocation
@@ -1051,8 +1135,19 @@ pub fn remove_images<'a>(
     repo: &ostree::Repo,
     imgs: impl IntoIterator<Item = &'a ImageReference>,
 ) -> Result<()> {
+    let mut missing = Vec::new();
     for img in imgs.into_iter() {
-        prune_image(repo, img)?;
+        let found = remove_image(repo, img)?;
+        if !found {
+            missing.push(img);
+        }
+    }
+    if !missing.is_empty() {
+        let missing = missing.into_iter().fold("".to_string(), |mut a, v| {
+            a.push_str(&v.to_string());
+            a
+        });
+        return Err(anyhow::anyhow!("Missing images: {missing}"));
     }
     Ok(())
 }
