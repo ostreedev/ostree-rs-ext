@@ -850,13 +850,9 @@ async fn testing(opts: &TestingOpts) -> Result<()> {
         TestingOpts::RunIMA => crate::integrationtest::test_ima(),
         TestingOpts::FilterTar => {
             let tmpdir = cap_std_ext::cap_tempfile::TempDir::new(cap_std::ambient_authority())?;
-            crate::tar::filter_tar(
-                std::io::stdin(),
-                std::io::stdout(),
-                &Default::default(),
-                &tmpdir,
-            )
-            .map(|_| {})
+            let stdin = std::io::stdin();
+            crate::tar::filter_tar(stdin, std::io::stdout(), &Default::default(), &tmpdir)
+                .map(|_| {})
         }
     }
 }

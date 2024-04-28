@@ -45,11 +45,6 @@ use tokio::{
 };
 use tracing::instrument;
 
-/// The legacy MIME type returned by the skopeo/(containers/storage) code
-/// when we have local uncompressed docker-formatted image.
-/// TODO: change the skopeo code to shield us from this correctly
-const DOCKER_TYPE_LAYER_TAR: &str = "application/vnd.docker.image.rootfs.diff.tar";
-
 type Progress = tokio::sync::watch::Sender<u64>;
 
 /// A read wrapper that updates the download progress.
@@ -189,26 +184,8 @@ pub async fn unencapsulate(repo: &ostree::Repo, imgref: &OstreeImageReference) -
     importer.unencapsulate().await
 }
 
-/// Create a decompressor for this MIME type, given a stream of input.
-fn new_async_decompressor<'a>(
-    media_type: &oci_image::MediaType,
-    src: impl AsyncBufRead + Send + Unpin + 'a,
-) -> Result<Box<dyn AsyncBufRead + Send + Unpin + 'a>> {
-    match media_type {
-        oci_image::MediaType::ImageLayerGzip => Ok(Box::new(tokio::io::BufReader::new(
-            async_compression::tokio::bufread::GzipDecoder::new(src),
-        ))),
-        oci_image::MediaType::ImageLayerZstd => Ok(Box::new(tokio::io::BufReader::new(
-            async_compression::tokio::bufread::ZstdDecoder::new(src),
-        ))),
-        oci_image::MediaType::ImageLayer => Ok(Box::new(src)),
-        oci_image::MediaType::Other(t) if t.as_str() == DOCKER_TYPE_LAYER_TAR => Ok(Box::new(src)),
-        o => Err(anyhow::anyhow!("Unhandled layer type: {}", o)),
-    }
-}
-
-/// A wrapper for [`get_blob`] which fetches a layer and decompresses it.
-pub(crate) async fn fetch_layer_decompress<'a>(
+/// A wrapper for [`get_blob`] which fetches a layer
+pub(crate) async fn fetch_layer<'a>(
     proxy: &'a mut ImageProxy,
     img: &OpenedImage,
     manifest: &oci_image::ImageManifest,
@@ -219,12 +196,12 @@ pub(crate) async fn fetch_layer_decompress<'a>(
 ) -> Result<(
     Box<dyn AsyncBufRead + Send + Unpin>,
     impl Future<Output = Result<()>> + 'a,
+    oci_image::MediaType,
 )> {
     use futures_util::future::Either;
     tracing::debug!("fetching {}", layer.digest());
     let layer_index = manifest.layers().iter().position(|x| x == layer).unwrap();
-    let (blob, driver, size);
-    let media_type: &oci_image::MediaType;
+    let (blob, driver, size, media_type);
     match transport_src {
         Transport::ContainerStorage => {
             let layer_info = layer_info
@@ -234,17 +211,17 @@ pub(crate) async fn fetch_layer_decompress<'a>(
                 anyhow!("blobid position {layer_index} exceeds diffid count {n_layers}")
             })?;
             size = layer_blob.size;
-            media_type = &layer_blob.media_type;
             (blob, driver) = proxy
                 .get_blob(img, layer_blob.digest.as_str(), size as u64)
                 .await?;
+            media_type = layer_blob.media_type.clone();
         }
         _ => {
             size = layer.size();
-            media_type = layer.media_type();
             (blob, driver) = proxy
                 .get_blob(img, layer.digest().as_str(), size as u64)
                 .await?;
+            media_type = layer.media_type().clone();
         }
     };
 
@@ -262,11 +239,9 @@ pub(crate) async fn fetch_layer_decompress<'a>(
                 progress.send_replace(Some(status));
             }
         };
-        let reader = new_async_decompressor(media_type, readprogress)?;
         let driver = futures_util::future::join(readproxy, driver).map(|r| r.1);
-        Ok((reader, Either::Left(driver)))
+        Ok((Box::new(readprogress), Either::Left(driver), media_type))
     } else {
-        let blob = new_async_decompressor(media_type, blob)?;
-        Ok((blob, Either::Right(driver)))
+        Ok((Box::new(blob), Either::Right(driver), media_type))
     }
 }

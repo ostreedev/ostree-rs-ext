@@ -380,9 +380,8 @@ async fn test_tar_write() -> Result<()> {
     tmproot.write("run/somefile", "somestate")?;
     let tmptar = "testlayer.tar";
     cmd!(sh, "tar cf {tmptar} -C tmproot .").run()?;
-    let src = fixture.dir.open(tmptar)?;
+    let src = fixture.dir.open(tmptar).map(BufReader::new)?;
     fixture.dir.remove_file(tmptar)?;
-    let src = tokio::fs::File::from_std(src.into_std());
     let r = ostree_ext::tar::write_tar(fixture.destrepo(), src, "layer", None).await?;
     let layer_commit = r.commit.as_str();
     cmd!(
@@ -401,9 +400,7 @@ async fn test_tar_write() -> Result<()> {
 #[tokio::test]
 async fn test_tar_write_tar_layer() -> Result<()> {
     let fixture = Fixture::new_v1()?;
-    let uncompressed_tar = tokio::io::BufReader::new(
-        async_compression::tokio::bufread::GzipDecoder::new(EXAMPLE_TAR_LAYER),
-    );
+    let uncompressed_tar = flate2::read::GzDecoder::new(std::io::Cursor::new(EXAMPLE_TAR_LAYER));
     ostree_ext::tar::write_tar(fixture.destrepo(), uncompressed_tar, "test", None).await?;
     Ok(())
 }

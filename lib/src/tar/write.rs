@@ -23,7 +23,7 @@ use std::io::{BufWriter, Seek, Write};
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
+use tokio::io::{AsyncReadExt, AsyncWrite};
 use tracing::instrument;
 
 // Exclude things in https://www.freedesktop.org/wiki/Software/systemd/APIFileSystems/
@@ -290,17 +290,14 @@ pub(crate) fn filter_tar(
 /// Asynchronous wrapper for filter_tar()
 #[context("Filtering tar stream")]
 async fn filter_tar_async(
-    src: impl AsyncRead + Send + 'static,
+    mut src: impl std::io::Read + Send + 'static,
     mut dest: impl AsyncWrite + Send + Unpin,
     config: &TarImportConfig,
     repo_tmpdir: Dir,
 ) -> Result<BTreeMap<String, u32>> {
     let (tx_buf, mut rx_buf) = tokio::io::duplex(8192);
-    // The source must be moved to the heap so we know it is stable for passing to the worker thread
-    let src = Box::pin(src);
     let config = config.clone();
     let tar_transformer = tokio::task::spawn_blocking(move || {
-        let mut src = tokio_util::io::SyncIoBridge::new(src);
         let dest = tokio_util::io::SyncIoBridge::new(tx_buf);
         let r = filter_tar(&mut src, dest, &config, &repo_tmpdir);
         // Pass ownership of the input stream back to the caller - see below.
@@ -326,7 +323,7 @@ async fn filter_tar_async(
 #[instrument(level = "debug", skip_all)]
 pub async fn write_tar(
     repo: &ostree::Repo,
-    src: impl tokio::io::AsyncRead + Send + Unpin + 'static,
+    src: impl std::io::Read + Send + Unpin + 'static,
     refname: &str,
     options: Option<WriteTarOptions>,
 ) -> Result<WriteTarResult> {
@@ -435,7 +432,7 @@ pub async fn write_tar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{BufReader, Cursor};
 
     #[test]
     fn test_normalize_path() {
@@ -515,7 +512,7 @@ mod tests {
         rootfs_tar.append_dir_all(".", rootfs)?;
         let _ = rootfs_tar.into_inner()?;
         let mut dest = Vec::new();
-        let src = tokio::io::BufReader::new(tokio::fs::File::open(rootfs_tar_path).await?);
+        let src = std::fs::File::open(rootfs_tar_path).map(BufReader::new)?;
         let cap_tmpdir = Dir::open_ambient_dir(&tempd, cap_std::ambient_authority())?;
         filter_tar_async(src, &mut dest, &Default::default(), cap_tmpdir).await?;
         let dest = dest.as_slice();
