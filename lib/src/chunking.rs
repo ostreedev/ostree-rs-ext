@@ -215,25 +215,8 @@ impl Chunk {
         }
     }
 
-    fn move_obj(&mut self, dest: &mut Self, checksum: &str) -> bool {
-        // In most cases, we expect the object to exist in the source.  However, it's
-        // conveneient here to simply ignore objects which were already moved into
-        // a chunk.
-        if let Some((name, (size, paths))) = self.content.remove_entry(checksum) {
-            let v = dest.content.insert(name, (size, paths));
-            debug_assert!(v.is_none());
-            self.size -= size;
-            dest.size += size;
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl Chunking {
-    /// Generate an initial single chunk.
-    pub fn new(repo: &ostree::Repo, rev: &str) -> Result<Self> {
+    /// Generate an initial single chunk, returning it and its metadata size.
+    pub fn new_from_commit_with_size(repo: &ostree::Repo, rev: &str) -> Result<(Self, u64)> {
         // Find the target commit
         let rev = repo.require_rev(rev)?;
 
@@ -260,8 +243,36 @@ impl Chunking {
 
         generate_chunking_recurse(repo, &mut gen, &mut chunk, &contents_v)?;
 
+        Ok((chunk, gen.metadata_size))
+    }
+
+    /// Generate an initial single chunk.
+    pub fn new_from_commit(repo: &ostree::Repo, rev: &str) -> Result<Self> {
+        Self::new_from_commit_with_size(repo, rev).map(|r| r.0)
+    }
+
+    fn move_obj(&mut self, dest: &mut Self, checksum: &str) -> bool {
+        // In most cases, we expect the object to exist in the source.  However, it's
+        // conveneient here to simply ignore objects which were already moved into
+        // a chunk.
+        if let Some((name, (size, paths))) = self.content.remove_entry(checksum) {
+            let v = dest.content.insert(name, (size, paths));
+            debug_assert!(v.is_none());
+            self.size -= size;
+            dest.size += size;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Chunking {
+    /// Generate an initial single chunk.
+    pub fn new(repo: &ostree::Repo, rev: &str) -> Result<Self> {
+        let (chunk, metadata_size) = Chunk::new_from_commit_with_size(repo, rev)?;
         let chunking = Chunking {
-            metadata_size: gen.metadata_size,
+            metadata_size: metadata_size,
             remainder: chunk,
             ..Default::default()
         };
