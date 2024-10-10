@@ -10,11 +10,12 @@ use camino::{Utf8Path, Utf8PathBuf};
 use cap_std::fs::Dir;
 use cap_std_ext::cap_std;
 use cap_std_ext::prelude::CapStdExtDirExt;
-use clap::{Parser, Subcommand};
+use clap::{builder::ArgPredicate, Parser, Subcommand};
 use fn_error_context::context;
 use indexmap::IndexMap;
 use io_lifetimes::AsFd;
 use ostree::{gio, glib};
+use serde_json;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -193,6 +194,10 @@ pub(crate) enum ContainerOpts {
         /// Image reference, e.g. ostree-remote-image:someremote:registry:quay.io/exampleos/exampleos:latest
         #[clap(value_parser = parse_imgref)]
         imgref_new: OstreeImageReference,
+
+        /// Use JSON as output format.
+        #[clap(long)]
+        json: bool,
     },
 }
 
@@ -249,6 +254,10 @@ pub(crate) enum ContainerImageOpts {
         /// the new manifest.
         #[clap(long)]
         check: Option<Utf8PathBuf>,
+
+        /// Use JSON as output format. Only applies to the --check option.
+        #[clap(long, requires_if(ArgPredicate::IsPresent, "check"))]
+        json: bool,
     },
 
     /// Output metadata about an already stored container image.
@@ -853,6 +862,7 @@ async fn container_store(
     proxyopts: ContainerProxyOpts,
     quiet: bool,
     check: Option<Utf8PathBuf>,
+    json: bool,
 ) -> Result<()> {
     let mut imp = ImageImporter::new(repo, imgref, proxyopts.into()).await?;
     let prep = match imp.prepare().await? {
@@ -875,7 +885,11 @@ async fn container_store(
     }
     if let Some(previous_state) = prep.previous_state.as_ref() {
         let diff = ManifestDiff::new(&previous_state.manifest, &prep.manifest);
-        diff.print();
+        if json {
+            println!("{:#?}", serde_json::to_string(&diff));
+        } else {
+            diff.print();
+        }
     }
     print_layer_status(&prep);
     let printer = (!quiet).then(|| {
@@ -1103,9 +1117,10 @@ async fn run_from_opt(opt: Opt) -> Result<()> {
                     proxyopts,
                     quiet,
                     check,
+                    json,
                 } => {
                     let repo = parse_repo(&repo)?;
-                    container_store(&repo, &imgref, proxyopts, quiet, check).await
+                    container_store(&repo, &imgref, proxyopts, quiet, check, json).await
                 }
                 ContainerImageOpts::Reexport {
                     repo,
@@ -1338,12 +1353,17 @@ async fn run_from_opt(opt: Opt) -> Result<()> {
             ContainerOpts::Compare {
                 imgref_old,
                 imgref_new,
+                json,
             } => {
                 let (manifest_old, _) = crate::container::fetch_manifest(&imgref_old).await?;
                 let (manifest_new, _) = crate::container::fetch_manifest(&imgref_new).await?;
                 let manifest_diff =
                     crate::container::ManifestDiff::new(&manifest_old, &manifest_new);
-                manifest_diff.print();
+                if json {
+                    println!("{:#?}", serde_json::to_string(&manifest_diff));
+                } else {
+                    manifest_diff.print();
+                }
                 Ok(())
             }
         },
