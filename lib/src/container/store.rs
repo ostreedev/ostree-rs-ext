@@ -730,8 +730,8 @@ impl ImageImporter {
                 crate::tokio_util::spawn_blocking_cancellable_flatten(move |cancellable| {
                     let txn = repo.auto_transaction(Some(cancellable))?;
                     let mut importer = crate::tar::Importer::new_for_object_set(&repo);
-                    let blob = tokio_util::io::SyncIoBridge::new(blob);
-                    let mut archive = tar::Archive::new(blob);
+                    let mut blob = tokio_util::io::SyncIoBridge::new(blob);
+                    let mut archive = tar::Archive::new(&mut blob);
                     importer.import_objects(&mut archive, Some(cancellable))?;
                     let commit = if write_refs {
                         let commit = importer.finish_import_object_set()?;
@@ -742,10 +742,14 @@ impl ImageImporter {
                         None
                     };
                     txn.commit(Some(cancellable))?;
-                    Ok::<_, anyhow::Error>(commit)
+                    // Pass back ownership, see below
+                    Ok::<_, anyhow::Error>((blob.into_inner(), commit))
                 })
                 .map_err(|e| e.context(format!("Layer {}", layer.layer.digest())));
-            let commit = super::unencapsulate::join_fetch(import_task, driver).await?;
+            let (blob, commit) = super::unencapsulate::join_fetch(import_task, driver).await?;
+            // We can't close the read side until we've completed the rest of the processing
+            // to avoid breaking our own pipe-to-self. See https://github.com/ostreedev/ostree-rs-ext/issues/657
+            drop(blob);
             layer.commit = commit;
             if let Some(p) = self.layer_progress.as_ref() {
                 p.send(ImportProgress::OstreeChunkCompleted(layer.layer.clone()))
@@ -775,8 +779,8 @@ impl ImageImporter {
                 crate::tokio_util::spawn_blocking_cancellable_flatten(move |cancellable| {
                     let txn = repo.auto_transaction(Some(cancellable))?;
                     let mut importer = crate::tar::Importer::new_for_commit(&repo, remote);
-                    let blob = tokio_util::io::SyncIoBridge::new(blob);
-                    let mut archive = tar::Archive::new(blob);
+                    let mut blob = tokio_util::io::SyncIoBridge::new(blob);
+                    let mut archive = tar::Archive::new(&mut blob);
                     importer.import_commit(&mut archive, Some(cancellable))?;
                     let commit = importer.finish_import_commit();
                     if write_refs {
@@ -785,9 +789,13 @@ impl ImageImporter {
                     }
                     repo.mark_commit_partial(&commit, false)?;
                     txn.commit(Some(cancellable))?;
-                    Ok::<_, anyhow::Error>(commit)
+                    // Pass back ownership, see below
+                    Ok::<_, anyhow::Error>((blob.into_inner(), commit))
                 });
-            let commit = super::unencapsulate::join_fetch(import_task, driver).await?;
+            let (blob, commit) = super::unencapsulate::join_fetch(import_task, driver).await?;
+            // We can't close the read side until we've completed the rest of the processing
+            // to avoid breaking our own pipe-to-self. See https://github.com/ostreedev/ostree-rs-ext/issues/657
+            drop(blob);
             import.ostree_commit_layer.commit = Some(commit);
             if let Some(p) = self.layer_progress.as_ref() {
                 p.send(ImportProgress::OstreeChunkCompleted(

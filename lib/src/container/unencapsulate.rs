@@ -162,7 +162,7 @@ pub struct Import {
 /// to see if the worker function had an error *and* if the proxy
 /// had an error, but if the proxy's error ends in `broken pipe`
 /// then it means the real only error is from the worker.
-pub(crate) async fn join_fetch<T: std::fmt::Debug>(
+pub(crate) async fn join_fetch<T>(
     worker: impl Future<Output = Result<T>>,
     driver: impl Future<Output = Result<()>>,
 ) -> Result<T> {
