@@ -861,7 +861,7 @@ async fn test_container_chunked() -> Result<()> {
     assert!(prep.deprecated_warning().is_none());
     assert_eq!(prep.version(), Some("42.0"));
     let digest = prep.manifest_digest.clone();
-    assert!(prep.ostree_commit_layer.commit.is_none());
+    assert!(prep.ostree_commit_layer.as_ref().unwrap().commit.is_none());
     assert_eq!(prep.ostree_layers.len(), nlayers);
     assert_eq!(prep.layers.len(), 0);
     for layer in prep.layers.iter() {
@@ -938,7 +938,7 @@ r usr/bin/bash bash-v0
     let to_fetch = prep.layers_to_fetch().collect::<Result<Vec<_>>>()?;
     assert_eq!(to_fetch.len(), 2);
     assert_eq!(expected_digest, prep.manifest_digest);
-    assert!(prep.ostree_commit_layer.commit.is_none());
+    assert!(prep.ostree_commit_layer.as_ref().unwrap().commit.is_none());
     assert_eq!(prep.ostree_layers.len(), nlayers);
     let (first, second) = (to_fetch[0], to_fetch[1]);
     assert!(first.0.commit.is_none());
@@ -981,7 +981,7 @@ r usr/bin/bash bash-v0
     };
     let to_fetch = prep.layers_to_fetch().collect::<Result<Vec<_>>>()?;
     assert_eq!(to_fetch.len(), 1);
-    assert!(prep.ostree_commit_layer.commit.is_some());
+    assert!(prep.ostree_commit_layer.as_ref().unwrap().commit.is_some());
     assert_eq!(prep.ostree_layers.len(), nlayers);
 
     // We want to test explicit layer pruning
@@ -1316,7 +1316,7 @@ async fn test_container_write_derive() -> Result<()> {
         store::PrepareResult::Ready(r) => r,
     };
     let expected_digest = prep.manifest_digest.clone();
-    assert!(prep.ostree_commit_layer.commit.is_none());
+    assert!(prep.ostree_commit_layer.as_ref().unwrap().commit.is_none());
     assert_eq!(prep.layers.len(), 1);
     for layer in prep.layers.iter() {
         assert!(layer.commit.is_none());
@@ -1389,7 +1389,7 @@ async fn test_container_write_derive() -> Result<()> {
         store::PrepareResult::Ready(r) => r,
     };
     // We *should* already have the base layer.
-    assert!(prep.ostree_commit_layer.commit.is_some());
+    assert!(prep.ostree_commit_layer.as_ref().unwrap().commit.is_some());
     // One new layer
     assert_eq!(prep.layers.len(), 1);
     for layer in prep.layers.iter() {
