@@ -417,6 +417,8 @@ pub async fn write_tar(
     let mut c = tokio::process::Command::from(c);
     c.kill_on_drop(true);
     let mut r = c.spawn()?;
+    // Ensure the fd is open until the process is spawned
+    drop(repofd);
     tracing::trace!("Spawned ostree child process");
     // Safety: We passed piped() for all of these
     let child_stdin = r.stdin.take().unwrap();
