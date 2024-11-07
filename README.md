@@ -1,3 +1,13 @@
+# NOTE: THIS REPOSITORY IS MOVED INTO https://github.com/containers/bootc/
+
+This repository has been merged into https://github.com/containers/bootc/
+and will no longer be published as a standalone crate. Everything
+below is preserved for historical context.
+
+The future of ostree and containers/OCI will be driven by bootc.
+
+---
+
 # ostree-ext
 
 Extension APIs for [ostree](https://github.com/ostreedev/ostree/) that are written in Rust, using the [Rust ostree bindings](https://crates.io/crates/ostree).
